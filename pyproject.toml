@@ -1,5 +1,5 @@
 [project]
-name = "doc-intel-engine"
+name = "doc-intelligence"
 version = "0.1.0"
 description = "Production-oriented document intelligence service with OCR and LLM classification."
 readme = "README.md"
