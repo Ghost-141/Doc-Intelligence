@@ -1,0 +1,54 @@
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: doc-intel-api
+    env_file:
+      - ../.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      UPLOAD_DIR: /app/data/uploads
+      OCR_DEVICE: auto
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    ipc: host
+    shm_size: 8gb
+    gpus: all
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+    restart: unless-stopped
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: doc-intel-vllm
+    profiles: ["vllm"]
+    ports:
+      - "8001:8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - vllm_cache:/root/.cache/huggingface
+    ipc: host
+    gpus: all
+    command:
+      - --model
+      - ${VLLM_SERVE_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
+      - --api-key
+      - ${VLLM_API_KEY:-token-abc123}
+      - --dtype
+      - auto
+      - --gpu-memory-utilization
+      - ${VLLM_GPU_MEMORY_UTILIZATION:-0.3}
+      - --max-model-len
+      - ${VLLM_MAX_MODEL_LEN:-2048}
+    restart: unless-stopped
+
+volumes:
+  vllm_cache:
