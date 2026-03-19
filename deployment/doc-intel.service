@@ -1,0 +1,15 @@
+[Unit]
+Description=Doc Intel FastAPI Backend
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/opt/doc-intel-engine
+EnvironmentFile=/opt/doc-intel-engine/.env.production
+ExecStart=/opt/doc-intel-engine/.venv/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
