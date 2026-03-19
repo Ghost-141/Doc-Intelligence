@@ -9,8 +9,6 @@ from app.api.dependency import (
     get_ingestion_service,
     require_api_key,
 )
-from app.core.config import get_settings
-from app.core.security import limiter
 from app.schemas.document import DocumentResponse
 from app.services.classification import ClassificationService
 from app.services.extraction import ExtractionService
@@ -22,7 +20,6 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
 @router.post("/classify", response_model=DocumentResponse)
-@limiter.limit(get_settings().rate_limit)
 async def classify_document(
     request: Request,
     file: UploadFile = File(...),

@@ -29,6 +29,10 @@ class OCRBackend(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def extract_pdf_first_page(self, file_bytes: bytes) -> ExtractionResult:
+        raise NotImplementedError
+
+    @abstractmethod
     def extract_pdf(self, file_bytes: bytes) -> ExtractionResult:
         raise NotImplementedError
 
@@ -63,6 +67,7 @@ class AdaptivePaddleOCRBackend(OCRBackend):
             ocr_kwargs["lang"] = settings.ocr_language
         self._ocr = PaddleOCR(
             **ocr_kwargs,
+            enable_mkldnn=False,
         )
         logger.info(
             "ocr_backend_selected",
@@ -81,6 +86,11 @@ class AdaptivePaddleOCRBackend(OCRBackend):
     def extract_simple_image(self, file_bytes: bytes) -> ExtractionResult:
         return self.extract_image(file_bytes)
 
+    def extract_pdf_first_page(self, file_bytes: bytes) -> ExtractionResult:
+        pdf = pdfium.PdfDocument(file_bytes)
+        image = pdf[0].render(scale=1.5).to_pil().convert("RGB")
+        return self._run_ocr_pages([image], source="paddleocr_pdf_first_page")
+
     def extract_pdf(self, file_bytes: bytes) -> ExtractionResult:
         pdf = pdfium.PdfDocument(file_bytes)
         images = [
@@ -92,13 +102,21 @@ class AdaptivePaddleOCRBackend(OCRBackend):
     def warmup(self) -> None:
         started_at = perf_counter()
         warmup_image = Image.new("RGB", (64, 64), color="white")
-        list(self._ocr.predict(np.asarray(warmup_image)))
-        logger.info(
-            "ocr_warmup_completed",
-            latency_ms=round((perf_counter() - started_at) * 1000, 2),
-            ocr_device=self._profile["device"],
-            ocr_path=self._profile["path"],
-        )
+        try:
+            list(self._ocr.predict(np.asarray(warmup_image)))
+            logger.info(
+                "ocr_warmup_completed",
+                latency_ms=round((perf_counter() - started_at) * 1000, 2),
+                ocr_device=self._profile["device"],
+                ocr_path=self._profile["path"],
+            )
+        except Exception as exc:
+            logger.exception(
+                "ocr_warmup_failed",
+                error=str(exc),
+                ocr_device=self._profile["device"],
+                ocr_path=self._profile["path"],
+            )
 
     def _run_ocr_pages(
         self, images: list[Image.Image], source: str
@@ -195,9 +213,7 @@ def _build_extraction_result(
     )
 
 
-def _select_ocr_profile(
-    settings: Settings, runtime: dict[str, Any]
-) -> dict[str, Any]:
+def _select_ocr_profile(settings: Settings, runtime: dict[str, Any]) -> dict[str, Any]:
     requested_device = settings.ocr_device.lower()
     wants_cpu = requested_device == "cpu"
     wants_gpu = requested_device.startswith("gpu")

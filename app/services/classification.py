@@ -58,6 +58,29 @@ class ClassificationService:
         )
         return result
 
+    async def warmup(self) -> None:
+        started_at = perf_counter()
+        try:
+            await self._chat_json(
+                system_prompt="Classify the document into exactly one allowed category and return only valid JSON.",
+                user_prompt=f"Allowed categories: {', '.join(self.settings.category_list)}\nChunk text:\nwarmup",
+                schema=CLASSIFICATION_OUTPUT_SCHEMA,
+                max_tokens=self.settings.classification_chunk_max_tokens,
+            )
+            logger.info(
+                "classifier_warmup_completed",
+                provider=self.settings.classifier_provider,
+                model=self.settings.classifier_model,
+                latency_ms=round((perf_counter() - started_at) * 1000, 2),
+            )
+        except Exception as exc:
+            logger.warning(
+                "classifier_warmup_failed",
+                provider=self.settings.classifier_provider,
+                model=self.settings.classifier_model,
+                error=str(exc),
+            )
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

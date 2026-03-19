@@ -6,9 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, populate_by_name=True)
+    model_config = SettingsConfigDict(env_file=".env.production", env_file_encoding="utf-8", case_sensitive=False, populate_by_name=True)
 
-    app_name: str = Field(default="doc-intel-engine", alias="APP_NAME")
+    app_name: str = Field(default="doc-intelligence", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
@@ -36,11 +36,9 @@ class Settings(BaseSettings):
     image_ocr_max_dimension: int = Field(default=1600, alias="IMAGE_OCR_MAX_DIMENSION")
     image_ocr_jpeg_quality: int = Field(default=85, alias="IMAGE_OCR_JPEG_QUALITY")
     classifier_provider: str = Field(default="ollama", alias="CLASSIFIER_PROVIDER")
-    classifier_model: str = Field(default="qwen2.5:3b", alias="CLASSIFIER_MODEL")
+    classifier_model: str = Field(default="qwen2.5:1.5b", alias="CLASSIFIER_MODEL")
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
     ollama_keep_alive: str = Field(default="5m", alias="OLLAMA_KEEP_ALIVE")
-    vllm_base_url: str = Field(default="http://localhost:8001/v1", alias="VLLM_BASE_URL")
-    vllm_api_key: str = Field(default="", alias="VLLM_API_KEY")
     classification_timeout_seconds: int = Field(default=30, alias="CLASSIFICATION_TIMEOUT_SECONDS")
     classification_max_parallel_chunks: int = Field(default=3, alias="CLASSIFICATION_MAX_PARALLEL_CHUNKS")
     classification_first_page_target_chars: int = Field(default=700, alias="CLASSIFICATION_FIRST_PAGE_TARGET_CHARS")

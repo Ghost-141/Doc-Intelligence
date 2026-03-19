@@ -38,10 +38,15 @@ class ExtractionService:
         file_bytes = Path(document.file_path).read_bytes()
         if document.extension == ".pdf":
             extraction = self._extract_pdf_text(file_bytes)
-            if len(extraction.cleaned_text or extraction.text) >= self.settings.min_direct_text_length:
+            if (
+                len(extraction.cleaned_text or extraction.text)
+                >= self.settings.min_direct_text_length
+            ):
                 self._log_stage_timing("pdf_direct_text", started_at, document)
                 return extraction
-            result = self._extract_pdf_ocr(file_bytes, base_metadata=extraction.metadata)
+            result = self._extract_pdf_ocr(
+                file_bytes, base_metadata=extraction.metadata
+            )
             self._log_stage_timing("pdf_ocr_fallback", started_at, document)
             return result
         if document.extension == ".docx":
@@ -60,23 +65,41 @@ class ExtractionService:
             result = self._extract_image_ocr(file_bytes, document)
             self._log_stage_timing("simple_image_ocr", started_at, document)
             return result
-        raise HTTPException(status_code=415, detail=f"Unsupported extension: {document.extension or 'unknown'}")
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported extension: {document.extension or 'unknown'}",
+        )
 
     def _extract_pdf_text(self, file_bytes: bytes) -> ExtractionResult:
         reader = PdfReader(BytesIO(file_bytes))
-        pages = [(page.extract_text() or "").strip() for page in reader.pages]
+        total_pages = len(reader.pages)
+        first_page_text = (reader.pages[0].extract_text() or "").strip()
+        if len(first_page_text) < self.settings.min_direct_text_length:
+            full_text, cleaned_segments = clean_text_segments([first_page_text])
+            return ExtractionResult(
+                text=full_text,
+                cleaned_text=full_text,
+                source="pdf_text",
+                segments=cleaned_segments,
+                metadata={"pages": total_pages},
+            )
+        pages = [first_page_text] + [(page.extract_text() or "").strip() for page in reader.pages[1:]]
         full_text, cleaned_segments = clean_text_segments(pages)
         return ExtractionResult(
             text=full_text,
             cleaned_text=full_text,
             source="pdf_text",
             segments=cleaned_segments,
-            metadata={"pages": len(reader.pages)},
+            metadata={"pages": total_pages},
         )
 
     def _extract_docx(self, file_bytes: bytes) -> ExtractionResult:
         document = Document(BytesIO(file_bytes))
-        paragraphs = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+        paragraphs = [
+            paragraph.text.strip()
+            for paragraph in document.paragraphs
+            if paragraph.text.strip()
+        ]
         full_text, cleaned_segments = clean_text_segments(_chunk_paragraphs(paragraphs))
         return ExtractionResult(
             text=full_text,
@@ -90,14 +113,28 @@ class ExtractionService:
         html = markdown(file_bytes.decode("utf-8", errors="ignore"))
         text = BeautifulSoup(html, "html.parser").get_text(separator="\n").strip()
         full_text, cleaned_segments = clean_text_segments(_chunk_text(text))
-        return ExtractionResult(text=full_text, cleaned_text=full_text, source="markdown_text", segments=cleaned_segments, metadata={})
+        return ExtractionResult(
+            text=full_text,
+            cleaned_text=full_text,
+            source="markdown_text",
+            segments=cleaned_segments,
+            metadata={},
+        )
 
     def _extract_plaintext(self, file_bytes: bytes) -> ExtractionResult:
         text = file_bytes.decode("utf-8", errors="ignore").strip()
         full_text, cleaned_segments = clean_text_segments(_chunk_text(text))
-        return ExtractionResult(text=full_text, cleaned_text=full_text, source="plain_text", segments=cleaned_segments, metadata={})
+        return ExtractionResult(
+            text=full_text,
+            cleaned_text=full_text,
+            source="plain_text",
+            segments=cleaned_segments,
+            metadata={},
+        )
 
-    def _extract_image_ocr(self, file_bytes: bytes, document: DocumentIngested) -> ExtractionResult:
+    def _extract_image_ocr(
+        self, file_bytes: bytes, document: DocumentIngested
+    ) -> ExtractionResult:
         preprocess_started_at = perf_counter()
         prepared = _compress_image_for_ocr(
             file_bytes=file_bytes,
@@ -115,13 +152,17 @@ class ExtractionService:
         )
         return self._ocr_backend.extract_simple_image(prepared)
 
-    def _extract_pdf_ocr(self, file_bytes: bytes, base_metadata: dict) -> ExtractionResult:
-        result = self._ocr_backend.extract_pdf(file_bytes)
+    def _extract_pdf_ocr(
+        self, file_bytes: bytes, base_metadata: dict
+    ) -> ExtractionResult:
+        result = self._ocr_backend.extract_pdf_first_page(file_bytes)
         result.metadata["fallback_from"] = "pdf_text"
         result.metadata.update(base_metadata)
         return result
 
-    def _log_stage_timing(self, stage: str, started_at: float, document: DocumentIngested) -> None:
+    def _log_stage_timing(
+        self, stage: str, started_at: float, document: DocumentIngested
+    ) -> None:
         logger.info(
             "extraction_stage_timing",
             stage=stage,
@@ -154,9 +195,11 @@ def _chunk_text(text: str, target_size: int = 2200) -> list[str]:
     return _chunk_paragraphs(lines, target_size=target_size) if lines else [text]
 
 
-def _compress_image_for_ocr(file_bytes: bytes, max_dimension: int, jpeg_quality: int) -> bytes:
+def _compress_image_for_ocr(
+    file_bytes: bytes, max_dimension: int, jpeg_quality: int
+) -> bytes:
     image = Image.open(BytesIO(file_bytes)).convert("RGB")
     image.thumbnail((max_dimension, max_dimension))
     buffer = BytesIO()
-    image.save(buffer, format="JPEG", quality=jpeg_quality, optimize=True)
+    image.save(buffer, format="JPEG", quality=jpeg_quality)
     return buffer.getvalue()

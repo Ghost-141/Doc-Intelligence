@@ -7,7 +7,7 @@ Production-oriented document classification backend for `pdf`, `docx` and image 
 - One adaptive local `PaddleOCR` backend
   - GPU path when local Paddle CUDA is available
   - CPU fallback path otherwise
-- Startup OCR warmup so the first request does not pay the full cold-start cost
+- Concurrent startup warmup for both OCR and classifier so the first request does not pay the full cold-start cost
 - Ollama-based classification with:
   - persistent HTTP client
   - first-page paragraph probing
@@ -43,12 +43,34 @@ If you explicitly set `OCR_DEVICE=cpu`, the CPU path is forced even when CUDA is
 1. `POST /api/v1/documents/classify` accepts the upload.
 2. `IngestionService` stores the file under `data/uploads`.
 3. `ExtractionService` chooses direct-text extraction or OCR.
+
+### PDF extraction flow
+
+```
+Probe page 1 for embedded text
+  ├── text length >= MIN_DIRECT_TEXT_LENGTH
+  │     └── extract remaining pages → return full digital text (no OCR)
+  └── text length < MIN_DIRECT_TEXT_LENGTH
+        └── fall through to OCR on page 1 only (PaddleOCR, scale=1.5)
+```
+
 4. Images are resized/compressed before OCR.
 5. OCR runs through the selected PaddleOCR profile.
 6. The classifier probes page 1 first using paragraph-like chunks.
 7. Chunk classification runs concurrently in small batches.
 8. If confidence is high enough, the classifier exits early.
 9. Otherwise it falls back to broader document chunk classification.
+
+### Startup warmup flow
+
+Both OCR and classifier warm up concurrently at startup:
+
+```
+[PaddleOCR init + warmup]       ← runs in thread executor
+[Classifier init + warmup]      ← runs concurrently in event loop
+         ↓
+app ready — total time = max(ocr, classifier)
+```
 
 ## Repository Layout
 
@@ -191,6 +213,89 @@ docker compose -f deployment/docker-compose.yml up --build
   - `shm_size: 8gb`
 - In practice, Docker deployment still depends on the target machine having a compatible GPU runtime and matching Paddle environment
 
+## Production Deployment (Ubuntu CPU)
+
+The active production deployment runs without Docker:
+
+- Python venv + `systemd` manages the FastAPI process
+- Nginx sits in front on port 80 and handles rate limiting
+- Ollama runs as a separate `systemd` service on `127.0.0.1:11434`
+- ngrok provides optional public HTTPS exposure
+
+Full step-by-step guide: [`deployment/UBUNTU_CPU_DEPLOYMENT.md`](deployment/UBUNTU_CPU_DEPLOYMENT.md)
+
+### systemd service
+
+The backend service unit is at `deployment/doc-intel.service`:
+
+```ini
+[Service]
+User=imtiaz
+WorkingDirectory=/home/imtiaz/Documents/Doc-Intelligence/
+EnvironmentFile=/home/imtiaz/Documents/Doc-Intelligence/.env.production
+ExecStart=/home/imtiaz/Documents/Doc-Intelligence/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+```
+
+Manage it:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable doc-intel
+sudo systemctl restart doc-intel
+journalctl -u doc-intel -f
+```
+
+### Nginx rate limiting
+
+Rate limiting is handled entirely by Nginx — not by the app. The config is at `deployment/nginx-doc-intel.conf`:
+
+```nginx
+limit_req_zone $binary_remote_addr zone=doc_intel:10m rate=10r/m;
+
+server {
+    listen 80;
+    server_name _;
+    client_max_body_size 25M;
+
+    location / {
+        limit_req zone=doc_intel burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:8000;
+        ...
+    }
+}
+```
+
+Install and reload:
+
+```bash
+sudo cp deployment/nginx-doc-intel.conf /etc/nginx/sites-available/doc-intel
+sudo ln -sf /etc/nginx/sites-available/doc-intel /etc/nginx/sites-enabled/doc-intel
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### ngrok public exposure
+
+ngrok tunnels the local Nginx port 80 to a public HTTPS URL:
+
+```bash
+ngrok http 80
+```
+
+ngrok prints a URL like `https://<id>.ngrok-free.app`. Use that as the base URL for external testing.
+
+ngrok free tier limit: 40 req/min through the tunnel. Nginx rate limiting (10r/m, burst=5) fires before that.
+
+### Deploy script
+
+`deployment/deploy_ubuntu.sh` pulls, syncs deps, and restarts all three services:
+
+```bash
+bash deployment/deploy_ubuntu.sh
+```
+
 ## Model Files
 
 With the current local PaddleOCR setup, model files are cached by PaddleX under your user profile, for example:
@@ -248,7 +353,8 @@ Real runtime errors, OCR failures, and application exceptions are still visible.
 
 ## Current Constraints
 
-- OCR startup is faster than before, but model warmup still happens at backend start
+- OCR and classifier warm up concurrently at startup — total startup time is `max(ocr_warmup, classifier_warmup)` not the sum
+- PDF OCR fallback only processes page 1 — sufficient for classification, not for full document extraction
 - CPU OCR fallback is lighter but less accurate on stylized or noisy documents
 - DB persistence is scaffolded but not wired into request handling
 - document processing is still synchronous request-time work
@@ -257,4 +363,53 @@ Real runtime errors, OCR failures, and application exceptions are still visible.
 
 ```bash
 pytest
+```
+
+## Testing the Running Server
+
+### Health check
+
+```bash
+curl http://127.0.0.1/api/health
+```
+
+### Classify a document
+
+```bash
+curl -X POST http://127.0.0.1/api/v1/documents/classify \
+  -H "X-API-Key: <your-api-key>" \
+  -F "file=@/path/to/sample.pdf"
+```
+
+Through ngrok:
+
+```bash
+curl -X POST https://<id>.ngrok-free.app/api/v1/documents/classify \
+  -H "X-API-Key: <your-api-key>" \
+  -F "file=@/path/to/sample.pdf"
+```
+
+### Rate limit test
+
+Fire 15 requests with 5 in parallel — you should see a mix of `200` and `429`:
+
+```bash
+seq 1 15 | xargs -P5 -I{} curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1/api/health
+```
+
+A `429` from Nginx has no `X-Ngrok-Error-Code` header. A `429` from the ngrok tunnel limit does.
+
+### Concurrency test
+
+```bash
+seq 1 10 | xargs -P3 -I{} curl -s -X POST \
+  -H "X-API-Key: <your-api-key>" \
+  -F "file=@tests/fixtures/sample.pdf" \
+  http://127.0.0.1/api/v1/documents/classify
+```
+
+Watch logs live:
+
+```bash
+journalctl -u doc-intel -f
 ```

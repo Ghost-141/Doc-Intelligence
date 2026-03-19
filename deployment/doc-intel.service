@@ -1,13 +1,13 @@
 [Unit]
-Description=Doc Intel FastAPI Backend
+Description=Doc Intelligence FastAPI Backend
 After=network-online.target ollama.service
 Wants=network-online.target
 
 [Service]
-User=ubuntu
-WorkingDirectory=/opt/doc-intel-engine
-EnvironmentFile=/opt/doc-intel-engine/.env.production
-ExecStart=/opt/doc-intel-engine/.venv/bin/uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+User=imtiaz
+WorkingDirectory=/home/imtiaz/Documents/Doc-Intelligence/
+EnvironmentFile=/home/imtiaz/Documents/Doc-Intelligence/.env.production
+ExecStart=/home/imtiaz/Documents/Doc-Intelligence/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=5
 

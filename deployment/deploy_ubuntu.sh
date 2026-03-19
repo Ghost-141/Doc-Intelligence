@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="/opt/doc-intel-engine"
+APP_DIR="/home/imtiaz/Documents/Doc-Intelligence/"
 VENV_ACTIVATE="$APP_DIR/.venv/bin/activate"
 
 cd "$APP_DIR"
@@ -24,4 +24,5 @@ uv pip install paddlepaddle
 
 sudo systemctl restart ollama
 sudo systemctl restart doc-intel
+sudo systemctl reload nginx
 sudo systemctl status doc-intel --no-pager
