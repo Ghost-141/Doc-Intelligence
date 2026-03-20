@@ -18,8 +18,6 @@ Production-oriented document classification backend for `pdf`, `docx` and image 
 
 ## OCR Design
 
-The app no longer uses PaddleOCR-VL.
-
 At backend startup, the OCR layer checks local Paddle CUDA support and picks one model profile:
 
 ### GPU path
