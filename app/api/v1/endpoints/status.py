@@ -46,11 +46,6 @@ def _build_unavailable_ocr_health(error: str | None) -> ModelHealth:
 def _build_unavailable_classifier_health(
     settings: Settings, error: str | None
 ) -> ModelHealth:
-    base_url = (
-        settings.vllm_base_url.rstrip("/")
-        if settings.classifier_provider == "vllm"
-        else settings.ollama_base_url.rstrip("/")
-    )
     return ModelHealth(
         name=settings.classifier_model,
         type="classifier",
@@ -58,7 +53,7 @@ def _build_unavailable_classifier_health(
         uses_gpu=None,
         details={
             "provider": settings.classifier_provider,
-            "base_url": base_url,
+            "base_url": settings.ollama_base_url.rstrip("/"),
             "error": error or "Classification service failed to initialize.",
         },
     )

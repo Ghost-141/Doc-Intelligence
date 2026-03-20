@@ -1,0 +1,58 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]
+
+  - job_name: fastapi-app-metrics
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+
+  - job_name: fastapi-health
+    metrics_path: /probe
+    params:
+      module: [fastapi_health]
+    static_configs:
+      - targets:
+          - http://host.docker.internal:8000/api/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: fastapi-alive
+    metrics_path: /probe
+    params:
+      module: [fastapi_alive]
+    static_configs:
+      - targets:
+          - http://host.docker.internal:8000/api/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: ollama-alive
+    metrics_path: /probe
+    params:
+      module: [fastapi_alive]
+    static_configs:
+      - targets:
+          - http://host.docker.internal:11434/api/tags
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

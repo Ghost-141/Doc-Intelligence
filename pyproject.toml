@@ -14,6 +14,7 @@ dependencies = [
   "paddleocr[doc-parser]==3.4.0",
   "paddlepaddle>=3.3.0",
   "pillow==12.1.1",
+  "prometheus-client==0.23.1",
   "pydantic==2.12.5",
   "pydantic-settings==2.13.1",
   "pypdf==6.9.0",

@@ -28,9 +28,6 @@ class ClassificationService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._chunk_semaphore = asyncio.Semaphore(max(1, settings.classification_max_parallel_chunks))
-        headers = {}
-        if settings.classifier_provider == "vllm" and settings.vllm_api_key:
-            headers["Authorization"] = f"Bearer {settings.vllm_api_key}"
         self._client = httpx.AsyncClient(
             base_url=self._get_provider_base_url(),
             timeout=settings.classification_timeout_seconds,
@@ -38,14 +35,13 @@ class ClassificationService:
                 max_connections=max(1, settings.ollama_max_connections),
                 max_keepalive_connections=max(1, settings.ollama_max_connections),
             ),
-            headers=headers,
         )
 
     async def classify(self, extraction: ExtractionResult) -> ClassificationResult:
         started_at = perf_counter()
         text = (extraction.cleaned_text or extraction.text)[: self.settings.text_snippet_limit]
-        chunks = self._build_chunks(extraction)
-        if self.settings.classifier_provider in {"ollama", "vllm"}:
+        chunks = self._build_vote_chunks(extraction, text)
+        if self.settings.classifier_provider == "ollama":
             result = await self._classify_with_ollama(text, chunks, extraction)
         else:
             result = self._heuristic_classify(text)
@@ -87,8 +83,6 @@ class ClassificationService:
     async def get_health(self) -> ModelHealth:
         details = self._base_health_details()
         try:
-            if self.settings.classifier_provider == "vllm":
-                return await self._get_vllm_health(details)
             return await self._get_ollama_health(details)
         except Exception as exc:
             details["error"] = str(exc)
@@ -120,9 +114,6 @@ class ClassificationService:
     async def _classify_with_ollama(
         self, text: str, chunks: Sequence[str], extraction: ExtractionResult
     ) -> ClassificationResult:
-        early_result = await self._classify_from_first_page_paragraphs(extraction)
-        if early_result is not None:
-            return early_result
         chunk_inputs = list(chunks or [text])
         chunk_started_at = perf_counter()
         analyses = await asyncio.gather(
@@ -130,26 +121,161 @@ class ClassificationService:
         )
         logger.info(
             "classification_stage_timing",
-            stage=f"{self.settings.classifier_provider}_chunk_analysis",
+            stage=f"{self.settings.classifier_provider}_chunk_vote",
             latency_ms=round((perf_counter() - chunk_started_at) * 1000, 2),
             chunk_count=len(chunk_inputs),
         )
-        if len(analyses) == 1:
-            return self._build_ollama_result(analyses[0])
-        synthesis_started_at = perf_counter()
-        final = await self._chat_json(
-            system_prompt="Classify the document into exactly one allowed category and return only valid JSON.",
-            user_prompt=self._build_synthesis_prompt(analyses),
-            schema=CLASSIFICATION_OUTPUT_SCHEMA,
-            max_tokens=self.settings.classification_final_max_tokens,
+        return self._build_vote_result(analyses, text)
+
+    def _build_vote_chunks(self, extraction: ExtractionResult, text: str) -> list[str]:
+        page_chunks = self._build_chunks(extraction)
+        if len(page_chunks) >= 3:
+            return self._select_representative_chunks(page_chunks, max_chunks=3)
+        if len(page_chunks) == 2:
+            return page_chunks
+
+        paragraph_chunks = self._build_first_page_paragraph_chunks(extraction)
+        if len(paragraph_chunks) >= 2:
+            return paragraph_chunks[:3]
+
+        if text:
+            split_text_chunks = self._split_text_for_voting(text, max_chunks=3)
+            if split_text_chunks:
+                return split_text_chunks
+
+        return page_chunks or ([text] if text else [])
+
+    def _select_representative_chunks(
+        self, chunks: Sequence[str], max_chunks: int = 3
+    ) -> list[str]:
+        if len(chunks) <= max_chunks:
+            return list(chunks)
+        if max_chunks == 1:
+            return [chunks[0]]
+        indexes = [0, len(chunks) // 2, len(chunks) - 1] if max_chunks == 3 else [
+            round(index * (len(chunks) - 1) / max(1, max_chunks - 1))
+            for index in range(max_chunks)
+        ]
+        selected: list[str] = []
+        seen_indexes: set[int] = set()
+        for index in indexes:
+            if index in seen_indexes:
+                continue
+            seen_indexes.add(index)
+            selected.append(chunks[index])
+        return selected
+
+    def _split_text_for_voting(self, text: str, max_chunks: int = 3) -> list[str]:
+        normalized_text = text.strip()
+        if not normalized_text:
+            return []
+        raw_parts = [
+            part.strip()
+            for part in re.split(r"\f|\n\s*\n", normalized_text)
+            if part and part.strip()
+        ]
+        if len(raw_parts) <= 1:
+            raw_parts = [line.strip() for line in normalized_text.splitlines() if line.strip()]
+        if len(raw_parts) <= 1:
+            return _split_large_paragraph(
+                normalized_text[: self.settings.text_snippet_limit],
+                target_chars=max(400, min(self.settings.text_snippet_limit, len(normalized_text) // max(1, max_chunks))),
+                min_chars=120,
+            )[:max_chunks] or [normalized_text[: self.settings.text_snippet_limit]]
+
+        target_chars = max(
+            400,
+            min(self.settings.text_snippet_limit, max(600, len(normalized_text) // max(1, max_chunks))),
         )
-        logger.info(
-            "classification_stage_timing",
-            stage=f"{self.settings.classifier_provider}_synthesis",
-            latency_ms=round((perf_counter() - synthesis_started_at) * 1000, 2),
-            chunk_count=len(chunk_inputs),
+        min_chars = 120
+        chunks: list[str] = []
+        current: list[str] = []
+        current_size = 0
+        for part in raw_parts:
+            if current and current_size + len(part) > target_chars and len(chunks) < max_chunks - 1:
+                chunks.append("\n\n".join(current).strip()[: self.settings.text_snippet_limit])
+                current = []
+                current_size = 0
+            current.append(part)
+            current_size += len(part)
+        if current:
+            chunks.append("\n\n".join(current).strip()[: self.settings.text_snippet_limit])
+        return _merge_small_chunks(chunks, min_chars=min_chars, target_chars=target_chars)[:max_chunks]
+
+    def _build_vote_result(self, analyses: Sequence[dict], text: str) -> ClassificationResult:
+        normalized = [self._normalize_analysis_result(item) for item in analyses]
+        valid = [item for item in normalized if item["category"] in self.settings.category_list]
+        if not valid:
+            return self._heuristic_classify(text)
+
+        aggregate: dict[str, dict[str, float]] = {}
+        for item in valid:
+            stats = aggregate.setdefault(
+                item["category"],
+                {"count": 0.0, "score": 0.0, "max_confidence": 0.0},
+            )
+            stats["count"] += 1
+            stats["score"] += item["confidence"]
+            stats["max_confidence"] = max(stats["max_confidence"], item["confidence"])
+
+        ranked = sorted(
+            aggregate.items(),
+            key=lambda item: (item[1]["count"], item[1]["score"], item[1]["max_confidence"]),
+            reverse=True,
         )
-        return self._build_ollama_result(final)
+        best_category, best_stats = ranked[0]
+        average_confidence = best_stats["score"] / max(best_stats["count"], 1.0)
+
+        heuristic = self._heuristic_classify(text)
+        if best_stats["count"] >= 2:
+            if (
+                best_category == "other"
+                and heuristic.category != "other"
+                and heuristic.confidence >= 0.75
+            ):
+                heuristic.rationale = "Heuristic override after majority vote returned 'other'."
+                return heuristic
+            return ClassificationResult(
+                category=best_category,
+                confidence=min(1.0, average_confidence),
+                rationale="Three-chunk majority-vote classification.",
+                provider=self.settings.classifier_provider,
+                model=self.settings.classifier_model,
+                candidates=self.settings.category_list,
+            )
+
+        if (
+            heuristic.category != "other"
+            and heuristic.confidence >= 0.75
+            and (
+                best_category == "other"
+                or heuristic.confidence >= min(0.95, average_confidence + 0.15)
+            )
+        ):
+            heuristic.rationale = "Heuristic tie-break fallback for split chunk votes."
+            return heuristic
+
+        return ClassificationResult(
+            category=best_category,
+            confidence=min(1.0, average_confidence),
+            rationale="Three-chunk vote tie-break by summed confidence.",
+            provider=self.settings.classifier_provider,
+            model=self.settings.classifier_model,
+            candidates=self.settings.category_list,
+        )
+
+    def _normalize_analysis_result(self, payload: dict) -> dict[str, float | str]:
+        category = str(payload.get("category", "other")).strip().lower()
+        if category not in self.settings.category_list:
+            category = "other"
+        try:
+            confidence = float(payload.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return {
+            "category": category,
+            "confidence": min(max(confidence, 0.0), 1.0),
+        }
 
     async def _classify_from_first_page_paragraphs(
         self, extraction: ExtractionResult
@@ -208,21 +334,8 @@ class ClassificationService:
                 max_tokens=self.settings.classification_chunk_max_tokens,
             )
 
-    def _build_synthesis_prompt(self, analyses: Sequence[dict]) -> str:
-        return (
-            "You are classifying a complete document using analyses from 1-2 page chunks.\n"
-            f"Allowed categories: {', '.join(self.settings.category_list)}\n"
-            f"The OCR text may contain these languages: {', '.join(self.settings.ocr_target_language_list)}.\n"
-            "Review the chunk predictions and pick exactly one final category.\n"
-            "Prefer the category that best matches the whole document.\n"
-            "Return JSON only with keys: category, confidence.\n"
-            f"Chunk analyses:\n{json.dumps(list(analyses), ensure_ascii=True, indent=2)}"
-        )
-
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(1), retry=retry_if_exception_type(httpx.HTTPError), reraise=True)
     async def _chat_json(self, system_prompt: str, user_prompt: str, schema: dict, max_tokens: int) -> dict:
-        if self.settings.classifier_provider == "vllm":
-            return await self._chat_json_vllm(system_prompt, user_prompt, schema, max_tokens)
         response = await self._client.post(
             "/api/chat",
             json={
@@ -241,27 +354,7 @@ class ClassificationService:
         payload = response.json()
         return _parse_ollama_json_payload(payload)
 
-    async def _chat_json_vllm(self, system_prompt: str, user_prompt: str, schema: dict, max_tokens: int) -> dict:
-        response = await self._client.post(
-            "/chat/completions",
-            json={
-                "model": self.settings.classifier_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0.0,
-                "max_tokens": max(8, max_tokens),
-                "guided_json": schema,
-            },
-        )
-        response.raise_for_status()
-        payload = response.json()
-        return _parse_vllm_json_payload(payload)
-
     def _get_provider_base_url(self) -> str:
-        if self.settings.classifier_provider == "vllm":
-            return self.settings.vllm_base_url.rstrip("/")
         return self.settings.ollama_base_url.rstrip("/")
 
     def _base_health_details(self) -> dict:
@@ -301,37 +394,6 @@ class ClassificationService:
             type="classifier",
             status="ready",
             uses_gpu=uses_gpu,
-            details=details,
-        )
-
-    async def _get_vllm_health(self, details: dict) -> ModelHealth:
-        response = await self._client.get("/models")
-        response.raise_for_status()
-        payload = response.json()
-        models = payload.get("data", []) if isinstance(payload, dict) else []
-        current = next(
-            (
-                model
-                for model in models
-                if model.get("id") == self.settings.classifier_model
-            ),
-            None,
-        )
-        if current:
-            details["loaded_model"] = current.get("id", self.settings.classifier_model)
-            details["vllm_model"] = current
-            return ModelHealth(
-                name=self.settings.classifier_model,
-                type="classifier",
-                status="loaded",
-                uses_gpu=True,
-                details=details,
-            )
-        return ModelHealth(
-            name=self.settings.classifier_model,
-            type="classifier",
-            status="ready",
-            uses_gpu=True,
             details=details,
         )
 
@@ -414,49 +476,6 @@ class ClassificationService:
         line_parts = [line.strip() for line in first_page.splitlines() if line and line.strip()]
         return _merge_ocr_lines_to_paragraphs(line_parts)
 
-    def _select_early_exit_result(self, analyses: Sequence[dict]) -> ClassificationResult | None:
-        if not analyses:
-            return None
-        aggregate: dict[str, dict[str, float]] = {}
-        for item in analyses:
-            category = str(item.get("category", "")).strip().lower()
-            if category not in self.settings.category_list:
-                continue
-            try:
-                confidence = float(item.get("confidence", 0.0))
-            except (TypeError, ValueError):
-                confidence = 0.0
-            stats = aggregate.setdefault(
-                category,
-                {"count": 0.0, "score": 0.0, "max_confidence": 0.0},
-            )
-            stats["count"] += 1
-            stats["score"] += max(confidence, 0.0)
-            stats["max_confidence"] = max(stats["max_confidence"], confidence)
-        if not aggregate:
-            return None
-        best_category, best_stats = max(
-            aggregate.items(),
-            key=lambda item: (item[1]["score"], item[1]["count"], item[1]["max_confidence"]),
-        )
-        average_confidence = best_stats["score"] / max(best_stats["count"], 1.0)
-        if (
-            best_stats["max_confidence"] < self.settings.classification_early_exit_confidence
-            and not (
-                best_stats["count"] >= 2
-                and average_confidence >= self.settings.classification_early_exit_confidence
-            )
-        ):
-            return None
-        return ClassificationResult(
-            category=best_category,
-            confidence=min(1.0, average_confidence),
-            rationale="First-page paragraph early-exit classification.",
-            provider=self.settings.classifier_provider,
-            model=self.settings.classifier_model,
-            candidates=self.settings.category_list,
-        )
-
     def _heuristic_classify(self, text: str) -> ClassificationResult:
         keywords: dict[str, tuple[str, ...]] = {
             "invoice": ("invoice", "total due", "bill to", "payment terms"),
@@ -530,33 +549,6 @@ def _normalize_ollama_json_text(content: str) -> str:
         return text
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
     return match.group(0).strip() if match else text
-
-
-def _parse_vllm_json_payload(payload: dict) -> dict:
-    if not isinstance(payload, dict):
-        raise ValueError("vLLM response payload was not a JSON object.")
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        raise ValueError("vLLM response did not contain any completion choices.")
-    message = choices[0].get("message") if isinstance(choices[0], dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
-    if isinstance(content, list):
-        content = "".join(
-            part.get("text", "") for part in content if isinstance(part, dict)
-        )
-    if isinstance(content, dict):
-        return content
-    if not isinstance(content, str):
-        raise ValueError("vLLM response did not contain a string JSON payload.")
-    normalized = _normalize_ollama_json_text(content)
-    if not normalized:
-        raise ValueError("vLLM returned an empty response for a structured classification request.")
-    try:
-        return json.loads(normalized)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"vLLM returned non-JSON content for a structured classification request: {normalized[:200]!r}"
-        ) from exc
 
 
 def _split_large_paragraph(paragraph: str, target_chars: int, min_chars: int) -> list[str]:

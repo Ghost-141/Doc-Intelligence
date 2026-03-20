@@ -1,0 +1,60 @@
+scripts:
+  setup:
+    - uv sync
+
+  run-api:
+    - uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  run-api-reload:
+    - uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  test:
+    - uv run pytest
+
+  test-text:
+    - uv run pytest tests/test_text_cleaning.py
+
+  test-classification:
+    - uv run pytest tests/test_classification_service.py
+
+  verify-paddle:
+    - uv run python -c "import paddle; print(paddle.__version__); print(paddle.device.is_compiled_with_cuda())"
+
+  ollama-serve:
+    - ollama serve
+
+  ollama-pull:
+    - ollama pull qwen2.5:1.5b
+
+  docker-api-up:
+    - docker compose -f deployment/docker-compose.yml up --build api
+
+  docker-api-down:
+    - docker compose -f deployment/docker-compose.yml down
+
+  monitoring-up:
+    - docker compose -f deployment/monitoring/docker-compose.yml up -d
+
+  monitoring-down:
+    - docker compose -f deployment/monitoring/docker-compose.yml down
+
+  monitoring-down-volumes:
+    - docker compose -f deployment/monitoring/docker-compose.yml down -v
+
+  monitoring-config:
+    - docker compose -f deployment/monitoring/docker-compose.yml config
+
+  monitoring-logs-prometheus:
+    - docker compose -f deployment/monitoring/docker-compose.yml logs -f prometheus
+
+  monitoring-logs-grafana:
+    - docker compose -f deployment/monitoring/docker-compose.yml logs -f grafana
+
+  monitoring-logs-blackbox:
+    - docker compose -f deployment/monitoring/docker-compose.yml logs -f blackbox-exporter
+
+  check-health:
+    - powershell -NoProfile -Command "Invoke-RestMethod http://127.0.0.1:8000/api/health | ConvertTo-Json -Depth 10"
+
+  check-metrics:
+    - powershell -NoProfile -Command "(Invoke-WebRequest http://127.0.0.1:8000/metrics).Content"

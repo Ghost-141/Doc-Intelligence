@@ -8,13 +8,14 @@ import warnings
 
 from requests import RequestsDependencyWarning
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.metrics import normalize_request_path, observe_http_request, render_metrics, request_timer, update_service_availability
 from app.services.classification import ClassificationService
 from app.services.extraction import ExtractionService
 from app.services.ingestion import IngestionService
@@ -82,6 +83,17 @@ async def lifespan(app: FastAPI):
 
     app.state.extraction_service = results[0] if not isinstance(results[0], Exception) else None
     app.state.classification_service = results[1] if not isinstance(results[1], Exception) else None
+    update_service_availability(
+        startup_errors=app.state.startup_errors,
+        available_services=(
+            name
+            for name, service in (
+                ("ocr", app.state.extraction_service),
+                ("classifier", app.state.classification_service),
+            )
+            if service is not None
+        ),
+    )
 
     startup_duration_ms = (perf_counter() - started_at) * 1000
     if app.state.startup_errors:
@@ -107,9 +119,34 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
     web_dir = Path(__file__).resolve().parent.parent / "frotnend"
 
+    @app.middleware("http")
+    async def prometheus_http_metrics(request: Request, call_next):
+        started_at = request_timer()
+        try:
+            response = await call_next(request)
+        except Exception:
+            observe_http_request(
+                method=request.method,
+                path=normalize_request_path(request),
+                status_code=500,
+                duration_seconds=perf_counter() - started_at,
+            )
+            raise
+        observe_http_request(
+            method=request.method,
+            path=normalize_request_path(request),
+            status_code=response.status_code,
+            duration_seconds=perf_counter() - started_at,
+        )
+        return response
+
     @app.get("/", include_in_schema=False)
     async def serve_frontend() -> FileResponse:
         return FileResponse(web_dir / "index.html")
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics():
+        return render_metrics()
 
     app.mount("/frontend-assets", StaticFiles(directory=web_dir), name="frontend-assets")
     app.include_router(api_router, prefix="/api")

@@ -36,3 +36,5 @@ models/
 .vscode/
 .DS_Store
 Thumbs.db
+deployment/monitoring/CUSTOM_METRICS_GUIDE.md
+deployment/monitoring/README.md

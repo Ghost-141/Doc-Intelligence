@@ -1,4 +1,4 @@
-Production-oriented document classification backend for `pdf`, `docx` and image uploads. The current pipeline uses direct text extraction when possible, adaptive local PaddleOCR for OCR, and Ollama for document classification.
+Production-oriented document classification backend for `pdf`, `docx` and image uploads. The current pipeline uses direct text extraction when possible, adaptive local PaddleOCR for OCR, and a three-chunk Ollama vote to classify each document.
 
 ## Current Architecture
 
@@ -10,9 +10,11 @@ Production-oriented document classification backend for `pdf`, `docx` and image 
 - Concurrent startup warmup for both OCR and classifier so the first request does not pay the full cold-start cost
 - Ollama-based classification with:
   - persistent HTTP client
-  - first-page paragraph probing
-  - concurrent early-exit chunk classification
-- Structured JSON logging and health reporting
+  - up to 3 representative chunks per document
+  - concurrent chunk classification
+  - majority-vote aggregation
+  - heuristic fallback and override when the model returns a weak `other`
+- Structured JSON logging, health reporting, and Prometheus metrics exposed at `/metrics`
 
 ## OCR Design
 
@@ -56,10 +58,13 @@ Probe page 1 for embedded text
 
 4. Images are resized/compressed before OCR.
 5. OCR runs through the selected PaddleOCR profile.
-6. The classifier probes page 1 first using paragraph-like chunks.
-7. Chunk classification runs concurrently in small batches.
-8. If confidence is high enough, the classifier exits early.
-9. Otherwise it falls back to broader document chunk classification.
+6. `ClassificationService` builds up to 3 vote chunks from extracted pages.
+7. If there are many page chunks, it keeps representative chunks from the beginning, middle, and end.
+8. If there are too few page chunks, it falls back to first-page paragraph chunks or splits the extracted text into 3 bounded chunks.
+9. Ollama classifies the selected chunks concurrently.
+10. The final class is chosen by majority vote.
+11. If the votes split, confidence is used as the tie-break.
+12. If the winning result is `other` but heuristics strongly match a known type such as `resume`, the heuristic result overrides it.
 
 ### Startup warmup flow
 
@@ -71,6 +76,70 @@ Both OCR and classifier warm up concurrently at startup:
          ↓
 app ready — total time = max(ocr, classifier)
 ```
+
+## Monitoring
+
+The app exposes Prometheus metrics at:
+
+- [http://localhost:8000/metrics](http://localhost:8000/metrics)
+
+A separate monitoring stack is included under:
+
+- [`deployment/monitoring/docker-compose.yml`](deployment/monitoring/docker-compose.yml)
+- [`deployment/monitoring/README.md`](deployment/monitoring/README.md)
+
+That stack runs:
+
+- `Prometheus` for scraping and storing metrics
+- `Grafana` for dashboards
+- `blackbox-exporter` for uptime and health probes
+
+### App metrics exposed by FastAPI
+
+- `docintel_http_requests_total`
+  - total HTTP requests by method, path, and status code
+- `docintel_http_request_duration_seconds`
+  - HTTP latency histogram by method and path
+- `docintel_document_classifications_total`
+  - completed classification requests by document type, predicted class, and success or failure
+- `docintel_document_classification_duration_seconds`
+  - end-to-end processing latency for document classification
+- `docintel_document_stage_duration_seconds`
+  - per-step timing for `ingestion`, `extraction`, and `classification`
+- `docintel_document_upload_size_bytes`
+  - uploaded file size distribution by extension
+- `docintel_service_available`
+  - whether OCR and classifier services are available after startup
+- `docintel_startup_degraded`
+  - whether the app started in degraded mode
+
+### Probe metrics collected by Prometheus
+
+- `probe_success{job="fastapi-alive"}`
+  - whether the app is reachable
+- `probe_success{job="fastapi-health"}`
+  - whether `/api/health` returned an `ok` health response
+- `probe_success{job="ollama-alive"}`
+  - whether the Ollama server is reachable
+- `probe_duration_seconds`
+  - blackbox probe latency
+- `probe_http_status_code`
+  - HTTP status codes returned by the probed endpoints
+
+### Grafana dashboards included
+
+- `FastAPI Health`
+  - app reachability, app health, Ollama reachability, probe latency, and status code
+- `FastAPI App Metrics`
+  - total classified docs
+  - average processing time
+  - average processing time of each step over time
+  - documents classified per minute
+  - average processing time by document type
+  - request rate and latency
+  - classification counts and failed classifications
+  - upload size distribution
+  - service availability and degraded startup state
 
 ## Repository Layout
 
@@ -133,6 +202,20 @@ Open:
 - [http://localhost:8000/](http://localhost:8000/)
 - [http://localhost:8000/docs](http://localhost:8000/docs)
 - [http://localhost:8000/api/health](http://localhost:8000/api/health)
+- [http://localhost:8000/metrics](http://localhost:8000/metrics)
+
+### Optional: start Prometheus and Grafana
+
+If you want monitoring dashboards locally:
+
+```bash
+docker compose -f deployment/monitoring/docker-compose.yml up -d
+```
+
+Open:
+
+- [http://localhost:9090](http://localhost:9090) for Prometheus
+- [http://localhost:3001](http://localhost:3001) for Grafana
 
 ## GPU Setup Guide
 
@@ -221,8 +304,6 @@ ollama serve
 ollama pull qwen2.5:1.5b
 ```
 
-If you want a GPU-served OpenAI-compatible classifier instead, the repo also includes an optional `vllm` Docker Compose profile.
-
 ### 7. Start the API and verify GPU usage
 
 Start the backend:
@@ -263,12 +344,6 @@ Run the API container:
 
 ```bash
 docker compose -f deployment/docker-compose.yml up --build api
-```
-
-Run the optional vLLM container too:
-
-```bash
-docker compose -f deployment/docker-compose.yml --profile vllm up --build
 ```
 
 For Docker GPU execution to work, the host must expose the NVIDIA runtime into containers. If the container starts but `/api/health` reports CPU, the usual issue is host-side GPU runtime configuration rather than app code.

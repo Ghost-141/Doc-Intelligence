@@ -6,7 +6,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env.production", env_file_encoding="utf-8", case_sensitive=False, populate_by_name=True)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        populate_by_name=True,
+    )
 
     app_name: str = Field(default="doc-intelligence", alias="APP_NAME")
     app_env: str = Field(default="development", alias="APP_ENV")
@@ -16,7 +21,10 @@ class Settings(BaseSettings):
     glog_minloglevel: int = Field(default=2, alias="GLOG_minloglevel")
     upload_dir: Path = Field(default=Path("./data/uploads"), alias="UPLOAD_DIR")
     max_upload_size_mb: int = Field(default=25, alias="MAX_UPLOAD_SIZE_MB")
-    categories: str = Field(default="invoice,receipt,contract,resume,id_document,medical_record,bank_statement,report,letter,other", alias="CATEGORIES")
+    categories: str = Field(
+        default="invoice,receipt,contract,resume,id_document,medical_record,bank_statement,report,letter,other",
+        alias="CATEGORIES",
+    )
     enable_api_key_auth: bool = Field(default=False, alias="ENABLE_API_KEY_AUTH")
     api_keys: str = Field(default="", alias="API_KEYS")
     jwt_secret: str = Field(default="change-me", alias="JWT_SECRET")
@@ -29,29 +37,61 @@ class Settings(BaseSettings):
         default=False, alias="PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"
     )
     ocr_device: str = Field(default="auto", alias="OCR_DEVICE")
-    ocr_gpu_detection_model: str = Field(default="PP-OCRv5_server_det", alias="OCR_GPU_DETECTION_MODEL")
-    ocr_gpu_recognition_model: str = Field(default="PP-OCRv4_server_rec_doc", alias="OCR_GPU_RECOGNITION_MODEL")
-    ocr_cpu_detection_model: str = Field(default="PP-OCRv4_mobile_det", alias="OCR_CPU_DETECTION_MODEL")
-    ocr_cpu_recognition_model: str = Field(default="en_PP-OCRv4_mobile_rec", alias="OCR_CPU_RECOGNITION_MODEL")
-    image_ocr_max_dimension: int = Field(default=1600, alias="IMAGE_OCR_MAX_DIMENSION")
-    image_ocr_jpeg_quality: int = Field(default=85, alias="IMAGE_OCR_JPEG_QUALITY")
+    ocr_gpu_detection_model: str = Field(
+        default="PP-OCRv5_server_det", alias="OCR_GPU_DETECTION_MODEL"
+    )
+    ocr_gpu_recognition_model: str = Field(
+        default="PP-OCRv4_server_rec_doc", alias="OCR_GPU_RECOGNITION_MODEL"
+    )
+    ocr_cpu_detection_model: str = Field(
+        default="PP-OCRv4_mobile_det", alias="OCR_CPU_DETECTION_MODEL"
+    )
+    ocr_cpu_recognition_model: str = Field(
+        default="en_PP-OCRv4_mobile_rec", alias="OCR_CPU_RECOGNITION_MODEL"
+    )
+    image_ocr_max_dimension: int = Field(default=1080, alias="IMAGE_OCR_MAX_DIMENSION")
+    image_ocr_jpeg_quality: int = Field(default=75, alias="IMAGE_OCR_JPEG_QUALITY")
     classifier_provider: str = Field(default="ollama", alias="CLASSIFIER_PROVIDER")
     classifier_model: str = Field(default="qwen2.5:1.5b", alias="CLASSIFIER_MODEL")
-    ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
+    ollama_base_url: str = Field(
+        default="http://localhost:11434", alias="OLLAMA_BASE_URL"
+    )
     ollama_keep_alive: str = Field(default="5m", alias="OLLAMA_KEEP_ALIVE")
-    classification_timeout_seconds: int = Field(default=30, alias="CLASSIFICATION_TIMEOUT_SECONDS")
-    classification_max_parallel_chunks: int = Field(default=3, alias="CLASSIFICATION_MAX_PARALLEL_CHUNKS")
-    classification_first_page_target_chars: int = Field(default=700, alias="CLASSIFICATION_FIRST_PAGE_TARGET_CHARS")
-    classification_first_page_min_chars: int = Field(default=180, alias="CLASSIFICATION_FIRST_PAGE_MIN_CHARS")
-    classification_first_page_max_chunks: int = Field(default=6, alias="CLASSIFICATION_FIRST_PAGE_MAX_CHUNKS")
-    classification_first_page_batch_size: int = Field(default=3, alias="CLASSIFICATION_FIRST_PAGE_BATCH_SIZE")
-    classification_early_exit_confidence: float = Field(default=0.82, alias="CLASSIFICATION_EARLY_EXIT_CONFIDENCE")
-    classification_chunk_max_tokens: int = Field(default=24, alias="CLASSIFICATION_CHUNK_MAX_TOKENS")
-    classification_final_max_tokens: int = Field(default=16, alias="CLASSIFICATION_FINAL_MAX_TOKENS")
+    classification_timeout_seconds: int = Field(
+        default=30, alias="CLASSIFICATION_TIMEOUT_SECONDS"
+    )
+    classification_max_parallel_chunks: int = Field(
+        default=3, alias="CLASSIFICATION_MAX_PARALLEL_CHUNKS"
+    )
+    classification_first_page_target_chars: int = Field(
+        default=700, alias="CLASSIFICATION_FIRST_PAGE_TARGET_CHARS"
+    )
+    classification_first_page_min_chars: int = Field(
+        default=180, alias="CLASSIFICATION_FIRST_PAGE_MIN_CHARS"
+    )
+    classification_first_page_max_chunks: int = Field(
+        default=6, alias="CLASSIFICATION_FIRST_PAGE_MAX_CHUNKS"
+    )
+    classification_first_page_batch_size: int = Field(
+        default=3, alias="CLASSIFICATION_FIRST_PAGE_BATCH_SIZE"
+    )
+    classification_early_exit_confidence: float = Field(
+        default=0.82, alias="CLASSIFICATION_EARLY_EXIT_CONFIDENCE"
+    )
+    classification_chunk_max_tokens: int = Field(
+        default=24, alias="CLASSIFICATION_CHUNK_MAX_TOKENS"
+    )
+    classification_final_max_tokens: int = Field(
+        default=16, alias="CLASSIFICATION_FINAL_MAX_TOKENS"
+    )
     ollama_max_connections: int = Field(default=10, alias="OLLAMA_MAX_CONNECTIONS")
     text_snippet_limit: int = Field(default=6000, alias="TEXT_SNIPPET_LIMIT")
-    classification_chunk_pages: int = Field(default=2, alias="CLASSIFICATION_CHUNK_PAGES")
-    database_url: str = Field(default="sqlite:///./data/doc_intel.db", alias="DATABASE_URL")
+    classification_chunk_pages: int = Field(
+        default=2, alias="CLASSIFICATION_CHUNK_PAGES"
+    )
+    database_url: str = Field(
+        default="sqlite:///./data/doc_intel.db", alias="DATABASE_URL"
+    )
 
     @property
     def category_list(self) -> list[str]:
@@ -63,7 +103,11 @@ class Settings(BaseSettings):
 
     @property
     def ocr_target_language_list(self) -> list[str]:
-        return [item.strip() for item in self.ocr_target_languages.split(",") if item.strip()]
+        return [
+            item.strip()
+            for item in self.ocr_target_languages.split(",")
+            if item.strip()
+        ]
 
 
 @lru_cache
