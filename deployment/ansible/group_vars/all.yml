@@ -1,0 +1,69 @@
+---
+doc_intel_repo_url: "https://github.com/example-org/Doc-Intelligence.git"
+doc_intel_repo_version: "main"
+
+doc_intel_manage_app_user: false
+doc_intel_app_user: "ubuntu"
+doc_intel_app_group: "{{ doc_intel_app_user }}"
+doc_intel_app_home: "/home/{{ doc_intel_app_user }}"
+doc_intel_app_dir: "/opt/doc-intel-engine"
+doc_intel_upload_dir: "{{ doc_intel_app_dir }}/data/uploads"
+doc_intel_python_version: "3.11"
+doc_intel_uv_bin: "{{ doc_intel_app_home }}/.local/bin/uv"
+doc_intel_paddle_package: "paddlepaddle"
+
+doc_intel_api_host: "127.0.0.1"
+doc_intel_api_port: 8000
+doc_intel_ollama_bind_host: "127.0.0.1"
+doc_intel_ollama_port: 11434
+doc_intel_ollama_model: "qwen2.5:1.5b"
+
+doc_intel_server_name: "_"
+doc_intel_client_max_body_size: "25M"
+doc_intel_nginx_rate_limit: "10r/m"
+doc_intel_nginx_rate_burst: 5
+doc_intel_disable_default_nginx_site: true
+
+doc_intel_env:
+  APP_NAME: "doc-intelligence"
+  APP_ENV: "production"
+  HOST: "{{ doc_intel_api_host }}"
+  PORT: "{{ doc_intel_api_port }}"
+  LOG_LEVEL: "INFO"
+  GLOG_minloglevel: "2"
+  UPLOAD_DIR: "{{ doc_intel_upload_dir }}"
+  MAX_UPLOAD_SIZE_MB: "25"
+  CATEGORIES: "invoice,certificate,resume,identity_card,medical_record,bank_statement,other"
+  ENABLE_API_KEY_AUTH: true
+  API_KEYS: "replace-with-a-long-random-api-key"
+  JWT_SECRET: "replace-with-a-long-random-secret"
+  RATE_LIMIT: "30/minute"
+  MIN_DIRECT_TEXT_LENGTH: "80"
+  OCR_LANGUAGE: "en"
+  OCR_TARGET_LANGUAGES: "en,bn"
+  OCR_DETECT_ORIENTATION: true
+  OCR_DEVICE: "cpu"
+  PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: true
+  OCR_GPU_DETECTION_MODEL: "PP-OCRv5_server_det"
+  OCR_GPU_RECOGNITION_MODEL: "PP-OCRv4_server_rec_doc"
+  OCR_CPU_DETECTION_MODEL: "PP-OCRv4_mobile_det"
+  OCR_CPU_RECOGNITION_MODEL: "en_PP-OCRv4_mobile_rec"
+  IMAGE_OCR_MAX_DIMENSION: "720"
+  IMAGE_OCR_JPEG_QUALITY: "75"
+  CLASSIFIER_PROVIDER: "ollama"
+  CLASSIFIER_MODEL: "{{ doc_intel_ollama_model }}"
+  OLLAMA_BASE_URL: "http://{{ doc_intel_ollama_bind_host }}:{{ doc_intel_ollama_port }}"
+  OLLAMA_KEEP_ALIVE: "5m"
+  CLASSIFICATION_TIMEOUT_SECONDS: "30"
+  CLASSIFICATION_MAX_PARALLEL_CHUNKS: "3"
+  CLASSIFICATION_FIRST_PAGE_TARGET_CHARS: "700"
+  CLASSIFICATION_FIRST_PAGE_MIN_CHARS: "180"
+  CLASSIFICATION_FIRST_PAGE_MAX_CHUNKS: "6"
+  CLASSIFICATION_FIRST_PAGE_BATCH_SIZE: "3"
+  CLASSIFICATION_EARLY_EXIT_CONFIDENCE: "0.82"
+  CLASSIFICATION_CHUNK_MAX_TOKENS: "24"
+  CLASSIFICATION_FINAL_MAX_TOKENS: "16"
+  OLLAMA_MAX_CONNECTIONS: "10"
+  TEXT_SNIPPET_LIMIT: "5000"
+  CLASSIFICATION_CHUNK_PAGES: "2"
+  DATABASE_URL: "sqlite:///./data/doc_intel.db"

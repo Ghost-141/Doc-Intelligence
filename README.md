@@ -130,8 +130,155 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 Open:
 
+- [http://localhost:8000/](http://localhost:8000/)
 - [http://localhost:8000/docs](http://localhost:8000/docs)
 - [http://localhost:8000/api/health](http://localhost:8000/api/health)
+
+## GPU Setup Guide
+
+Use this path when you want PaddleOCR to run on an NVIDIA GPU instead of falling back to CPU.
+
+### 1. Host prerequisites
+
+Before installing Python dependencies, confirm the machine is GPU-ready:
+
+- NVIDIA driver is installed correctly
+- `nvidia-smi` works on the host
+- your Paddle GPU wheel matches the host CUDA stack
+- if you plan to use Docker, NVIDIA Container Toolkit is installed
+
+Quick host check:
+
+```bash
+nvidia-smi
+```
+
+If `nvidia-smi` fails, fix the driver/runtime first. The app cannot use GPU until the host GPU stack is healthy.
+
+### 2. Install the project normally
+
+Create and activate the virtual environment, then install the repo:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e .[dev]
+```
+
+### 3. Install a GPU Paddle runtime
+
+Install a `paddlepaddle-gpu` build that matches your CUDA version. This repo does not pin one specific GPU wheel because the correct package depends on the machine.
+
+Example pattern:
+
+```bash
+uv pip install paddlepaddle-gpu
+```
+
+If your environment needs a specific wheel index or version, use the Paddle install command that matches your CUDA runtime.
+
+### 4. Verify Paddle can see CUDA
+
+Run:
+
+```bash
+uv run python -c "import paddle; print(paddle.__version__); print(paddle.device.is_compiled_with_cuda())"
+```
+
+Expected result for a working GPU install:
+
+```text
+True
+```
+
+You can also confirm the project picks the GPU path by starting the API and checking `/api/health`.
+
+### 5. Set GPU-oriented environment values
+
+These values match the repo's active GPU OCR profile:
+
+```env
+OCR_DEVICE=auto
+PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+OCR_GPU_DETECTION_MODEL=PP-OCRv5_server_det
+OCR_GPU_RECOGNITION_MODEL=PP-OCRv4_server_rec_doc
+OCR_CPU_DETECTION_MODEL=PP-OCRv4_mobile_det
+OCR_CPU_RECOGNITION_MODEL=en_PP-OCRv4_mobile_rec
+```
+
+Notes:
+
+- `OCR_DEVICE=auto` lets the app select GPU when Paddle reports CUDA support
+- `OCR_DEVICE=gpu:0` is reasonable if you want to express GPU intent explicitly
+- if CUDA is unavailable at runtime, the app will fall back to CPU and `/api/health` will show that
+
+### 6. Start the classifier backend
+
+For the default local classifier path:
+
+```bash
+ollama serve
+ollama pull qwen2.5:1.5b
+```
+
+If you want a GPU-served OpenAI-compatible classifier instead, the repo also includes an optional `vllm` Docker Compose profile.
+
+### 7. Start the API and verify GPU usage
+
+Start the backend:
+
+```bash
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Then verify:
+
+```bash
+curl http://127.0.0.1:8000/api/health
+```
+
+In the OCR model section, look for GPU signals such as:
+
+- `status: "loaded"`
+- `uses_gpu: true`
+- `details.active_device: "gpu:0"`
+- `details.selected_path: "gpu"`
+
+### 8. Docker GPU path
+
+This repo already includes a GPU-oriented container setup:
+
+- [Dockerfile](/C:/Users/Imtiaz/Documents/GitHub/Doc-Intelligence/Dockerfile)
+- [deployment/docker-compose.yml](/C:/Users/Imtiaz/Documents/GitHub/Doc-Intelligence/deployment/docker-compose.yml)
+
+Current GPU-relevant settings already present there:
+
+- GPU-capable PaddleX base image in the Dockerfile
+- `gpus: all`
+- `ipc: host`
+- `shm_size: 8gb`
+- `OCR_DEVICE=auto`
+
+Run the API container:
+
+```bash
+docker compose -f deployment/docker-compose.yml up --build api
+```
+
+Run the optional vLLM container too:
+
+```bash
+docker compose -f deployment/docker-compose.yml --profile vllm up --build
+```
+
+For Docker GPU execution to work, the host must expose the NVIDIA runtime into containers. If the container starts but `/api/health` reports CPU, the usual issue is host-side GPU runtime configuration rather than app code.
+
+### 9. Common failure modes
+
+- `paddle.device.is_compiled_with_cuda()` returns `False`: wrong Paddle wheel or no CUDA-capable runtime
+- `nvidia-smi` works but app still uses CPU: the installed Paddle package does not match the machine CUDA stack
+- Docker sees no GPU: NVIDIA Container Toolkit or Docker GPU runtime is not configured
+- `/api/health` reports `unavailable`: OCR startup failed; inspect startup logs for the exact Paddle/PaddleOCR error
 
 ## Environment Configuration
 
@@ -223,6 +370,11 @@ The active production deployment runs without Docker:
 - ngrok provides optional public HTTPS exposure
 
 Full step-by-step guide: [`deployment/UBUNTU_CPU_DEPLOYMENT.md`](deployment/UBUNTU_CPU_DEPLOYMENT.md)
+
+Ansible automation for the same Ubuntu CPU path is available under:
+
+- `deployment/ansible/site.yml`
+- `deployment/ansible/README.md`
 
 ### systemd service
 

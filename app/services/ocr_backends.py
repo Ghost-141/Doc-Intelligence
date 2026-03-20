@@ -10,7 +10,6 @@ from PIL import Image
 
 os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
-from paddleocr import PaddleOCR
 import structlog
 
 from app.core.config import Settings
@@ -52,6 +51,8 @@ class OCRBackend(ABC):
 class AdaptivePaddleOCRBackend(OCRBackend):
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
+        from paddleocr import PaddleOCR
+
         runtime = _get_ocr_runtime_info(settings)
         self._profile = _select_ocr_profile(settings, runtime)
         ocr_kwargs = {

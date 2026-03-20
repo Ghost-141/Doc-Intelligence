@@ -12,7 +12,7 @@ import structlog
 
 from app.core.config import Settings
 from app.schemas.document import DocumentIngested, ExtractionResult, ModelHealth
-from app.services.ocr_backends import build_ocr_backend
+from app.services.ocr_backends import OCRBackend, build_ocr_backend
 from app.services.text_cleaning import clean_text_segments
 
 logger = structlog.get_logger(__name__)
@@ -25,13 +25,24 @@ class ExtractionService:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._ocr_backend = build_ocr_backend(settings)
+        self._ocr_backend: OCRBackend | None = None
+        self._ocr_backend_error: str | None = None
 
     def get_health(self) -> list[ModelHealth]:
-        return self._ocr_backend.get_health()
+        if self._ocr_backend is not None:
+            return self._ocr_backend.get_health()
+        if self._ocr_backend_error is not None:
+            return [self._build_unavailable_ocr_health(self._ocr_backend_error)]
+        try:
+            return self._get_ocr_backend().get_health()
+        except RuntimeError as exc:
+            return [self._build_unavailable_ocr_health(str(exc))]
 
     def warmup(self) -> None:
-        self._ocr_backend.warmup()
+        try:
+            self._get_ocr_backend().warmup()
+        except RuntimeError as exc:
+            logger.warning("ocr_backend_unavailable_during_warmup", error=str(exc))
 
     def extract(self, document: DocumentIngested) -> ExtractionResult:
         started_at = perf_counter()
@@ -150,15 +161,49 @@ class ExtractionService:
             original_size_bytes=len(file_bytes),
             prepared_size_bytes=len(prepared),
         )
-        return self._ocr_backend.extract_simple_image(prepared)
+        return self._require_ocr_backend().extract_simple_image(prepared)
 
     def _extract_pdf_ocr(
         self, file_bytes: bytes, base_metadata: dict
     ) -> ExtractionResult:
-        result = self._ocr_backend.extract_pdf_first_page(file_bytes)
+        result = self._require_ocr_backend().extract_pdf_first_page(file_bytes)
         result.metadata["fallback_from"] = "pdf_text"
         result.metadata.update(base_metadata)
         return result
+
+    def _get_ocr_backend(self) -> OCRBackend:
+        if self._ocr_backend is not None:
+            return self._ocr_backend
+        if self._ocr_backend_error is not None:
+            raise RuntimeError(self._ocr_backend_error)
+        try:
+            self._ocr_backend = build_ocr_backend(self.settings)
+            return self._ocr_backend
+        except Exception as exc:
+            self._ocr_backend_error = str(exc) or exc.__class__.__name__
+            logger.exception(
+                "ocr_backend_initialization_failed",
+                error=self._ocr_backend_error,
+            )
+            raise RuntimeError(self._ocr_backend_error) from exc
+
+    def _require_ocr_backend(self) -> OCRBackend:
+        try:
+            return self._get_ocr_backend()
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"OCR backend is unavailable: {exc}",
+            ) from exc
+
+    def _build_unavailable_ocr_health(self, error: str) -> ModelHealth:
+        return ModelHealth(
+            name="PaddleOCR",
+            type="ocr_primary",
+            status="unavailable",
+            uses_gpu=None,
+            details={"error": error},
+        )
 
     def _log_stage_timing(
         self, stage: str, started_at: float, document: DocumentIngested

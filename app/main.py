@@ -2,12 +2,15 @@ import asyncio
 from contextlib import asynccontextmanager
 import logging
 import os
+from pathlib import Path
 from time import perf_counter
 import warnings
 
 from requests import RequestsDependencyWarning
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
@@ -48,6 +51,9 @@ async def lifespan(app: FastAPI):
     started_at = perf_counter()
 
     app.state.ingestion_service = IngestionService(settings)
+    app.state.extraction_service = None
+    app.state.classification_service = None
+    app.state.startup_errors = {}
 
     loop = asyncio.get_event_loop()
 
@@ -69,17 +75,25 @@ async def lifespan(app: FastAPI):
 
     for name, result in zip(("ocr", "classifier"), results):
         if isinstance(result, Exception):
-            startup_logger.warning("startup: %s init/warmup failed — %s", name, result)
+            app.state.startup_errors[name] = str(result)
+            startup_logger.warning("startup: %s init/warmup failed - %s", name, result)
         else:
             startup_logger.info("startup: %s ready", name)
 
     app.state.extraction_service = results[0] if not isinstance(results[0], Exception) else None
     app.state.classification_service = results[1] if not isinstance(results[1], Exception) else None
 
-    startup_logger.info(
-        "startup: all services ready in %.0f ms",
-        (perf_counter() - started_at) * 1000,
-    )
+    startup_duration_ms = (perf_counter() - started_at) * 1000
+    if app.state.startup_errors:
+        startup_logger.warning(
+            "startup: completed with degraded services in %.0f ms",
+            startup_duration_ms,
+        )
+    else:
+        startup_logger.info(
+            "startup: all services ready in %.0f ms",
+            startup_duration_ms,
+        )
 
     try:
         yield
@@ -91,6 +105,13 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+    web_dir = Path(__file__).resolve().parent.parent / "frotnend"
+
+    @app.get("/", include_in_schema=False)
+    async def serve_frontend() -> FileResponse:
+        return FileResponse(web_dir / "index.html")
+
+    app.mount("/frontend-assets", StaticFiles(directory=web_dir), name="frontend-assets")
     app.include_router(api_router, prefix="/api")
     return app
 

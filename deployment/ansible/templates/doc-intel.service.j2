@@ -1,0 +1,16 @@
+[Unit]
+Description=Doc Intelligence FastAPI Backend
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+User={{ doc_intel_app_user }}
+Group={{ doc_intel_app_group }}
+WorkingDirectory={{ doc_intel_app_dir }}
+EnvironmentFile={{ doc_intel_app_dir }}/.env.production
+ExecStart={{ doc_intel_app_dir }}/.venv/bin/uvicorn app.main:app --host {{ doc_intel_api_host }} --port {{ doc_intel_api_port }}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

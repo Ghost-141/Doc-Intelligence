@@ -1,0 +1,241 @@
+---
+- name: Provision Doc Intelligence on Ubuntu
+  hosts: doc_intel
+  become: true
+  vars_files:
+    - group_vars/all.yml
+
+  pre_tasks:
+    - name: Validate repository URL
+      ansible.builtin.assert:
+        that:
+          - doc_intel_repo_url is string
+          - doc_intel_repo_url | length > 0
+          - "'example-org' not in doc_intel_repo_url"
+        fail_msg: "Set doc_intel_repo_url to the Git URL reachable from the target Ubuntu host."
+
+    - name: Validate API key secret
+      ansible.builtin.assert:
+        that:
+          - not doc_intel_env.ENABLE_API_KEY_AUTH | bool or doc_intel_env.API_KEYS != "replace-with-a-long-random-api-key"
+        fail_msg: "Override doc_intel_env.API_KEYS before deploying with API-key auth enabled."
+
+    - name: Validate JWT secret
+      ansible.builtin.assert:
+        that:
+          - doc_intel_env.JWT_SECRET != "replace-with-a-long-random-secret"
+        fail_msg: "Override doc_intel_env.JWT_SECRET before deploying."
+
+  tasks:
+    - name: Install apt packages
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - git
+          - curl
+          - nginx
+          - python3-pip
+          - "python{{ doc_intel_python_version }}"
+          - "python{{ doc_intel_python_version }}-venv"
+          - apache2-utils
+        state: present
+
+    - name: Optionally create application group
+      ansible.builtin.group:
+        name: "{{ doc_intel_app_group }}"
+        state: present
+      when: doc_intel_manage_app_user | bool
+
+    - name: Optionally create application user
+      ansible.builtin.user:
+        name: "{{ doc_intel_app_user }}"
+        group: "{{ doc_intel_app_group }}"
+        home: "{{ doc_intel_app_home }}"
+        shell: /bin/bash
+        create_home: true
+      when: doc_intel_manage_app_user | bool
+
+    - name: Ensure application directory exists
+      ansible.builtin.file:
+        path: "{{ doc_intel_app_dir }}"
+        state: directory
+        owner: "{{ doc_intel_app_user }}"
+        group: "{{ doc_intel_app_group }}"
+        mode: "0755"
+
+    - name: Ensure upload directory exists
+      ansible.builtin.file:
+        path: "{{ doc_intel_upload_dir }}"
+        state: directory
+        owner: "{{ doc_intel_app_user }}"
+        group: "{{ doc_intel_app_group }}"
+        mode: "0755"
+
+    - name: Install uv for the application user
+      ansible.builtin.shell: curl -LsSf https://astral.sh/uv/install.sh | sh
+      args:
+        creates: "{{ doc_intel_uv_bin }}"
+      become_user: "{{ doc_intel_app_user }}"
+      environment:
+        HOME: "{{ doc_intel_app_home }}"
+
+    - name: Checkout application repository
+      ansible.builtin.git:
+        repo: "{{ doc_intel_repo_url }}"
+        dest: "{{ doc_intel_app_dir }}"
+        version: "{{ doc_intel_repo_version }}"
+        update: true
+        force: false
+        accept_hostkey: true
+      become_user: "{{ doc_intel_app_user }}"
+      register: doc_intel_git_checkout
+      notify: restart doc-intel
+
+    - name: Create virtual environment
+      ansible.builtin.command: "python{{ doc_intel_python_version }} -m venv {{ doc_intel_app_dir }}/.venv"
+      args:
+        creates: "{{ doc_intel_app_dir }}/.venv/bin/python"
+
+    - name: Sync locked Python dependencies
+      ansible.builtin.command: "{{ doc_intel_uv_bin }} sync"
+      args:
+        chdir: "{{ doc_intel_app_dir }}"
+      become_user: "{{ doc_intel_app_user }}"
+      environment:
+        HOME: "{{ doc_intel_app_home }}"
+        PATH: "{{ doc_intel_app_home }}/.local/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+
+    - name: Install Paddle CPU runtime into the virtual environment
+      ansible.builtin.pip:
+        name: "{{ doc_intel_paddle_package }}"
+        virtualenv: "{{ doc_intel_app_dir }}/.venv"
+        state: present
+      notify: restart doc-intel
+
+    - name: Render production environment file
+      ansible.builtin.template:
+        src: templates/env.production.j2
+        dest: "{{ doc_intel_app_dir }}/.env.production"
+        owner: "{{ doc_intel_app_user }}"
+        group: "{{ doc_intel_app_group }}"
+        mode: "0640"
+      notify: restart doc-intel
+
+    - name: Install Ollama
+      ansible.builtin.shell: curl -fsSL https://ollama.com/install.sh | sh
+      args:
+        creates: /usr/local/bin/ollama
+
+    - name: Install Doc Intel systemd unit
+      ansible.builtin.template:
+        src: templates/doc-intel.service.j2
+        dest: /etc/systemd/system/doc-intel.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - reload systemd
+        - restart doc-intel
+
+    - name: Install Nginx site
+      ansible.builtin.template:
+        src: templates/nginx-doc-intel.conf.j2
+        dest: /etc/nginx/sites-available/doc-intel
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload nginx
+
+    - name: Enable Nginx site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/doc-intel
+        dest: /etc/nginx/sites-enabled/doc-intel
+        state: link
+        force: true
+      notify: reload nginx
+
+    - name: Disable default Nginx site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      when: doc_intel_disable_default_nginx_site | bool
+      notify: reload nginx
+
+    - name: Ensure Ollama service is enabled and started
+      ansible.builtin.systemd:
+        name: ollama
+        enabled: true
+        state: started
+
+    - name: Wait for Ollama API
+      ansible.builtin.wait_for:
+        host: "{{ doc_intel_ollama_bind_host }}"
+        port: "{{ doc_intel_ollama_port }}"
+        delay: 2
+        timeout: 120
+
+    - name: Check installed Ollama models
+      ansible.builtin.command: /usr/local/bin/ollama list
+      register: doc_intel_ollama_models
+      changed_when: false
+      environment:
+        OLLAMA_HOST: "{{ doc_intel_ollama_bind_host }}:{{ doc_intel_ollama_port }}"
+
+    - name: Pull Ollama model
+      ansible.builtin.command: "/usr/local/bin/ollama pull {{ doc_intel_ollama_model }}"
+      when: doc_intel_ollama_model not in doc_intel_ollama_models.stdout
+      environment:
+        OLLAMA_HOST: "{{ doc_intel_ollama_bind_host }}:{{ doc_intel_ollama_port }}"
+
+    - name: Validate Nginx configuration
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Ensure Nginx service is enabled and started
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: true
+        state: started
+
+    - name: Ensure Doc Intel service is enabled and started
+      ansible.builtin.systemd:
+        name: doc-intel
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Apply pending handler changes before health check
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for Doc Intel HTTP endpoint
+      ansible.builtin.wait_for:
+        host: "{{ doc_intel_api_host }}"
+        port: "{{ doc_intel_api_port }}"
+        delay: 2
+        timeout: 180
+
+    - name: Verify health endpoint through Nginx
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/api/health"
+        status_code: 200
+
+  handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: restart ollama
+      ansible.builtin.systemd:
+        name: ollama
+        state: restarted
+
+    - name: restart doc-intel
+      ansible.builtin.systemd:
+        name: doc-intel
+        state: restarted
+
+    - name: reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded

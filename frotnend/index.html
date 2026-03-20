@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Doc Classifier Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/frontend-assets/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="icon-rail" aria-label="Navigation">
+      <button class="icon-rail__button icon-rail__button--active" type="button" aria-label="Documents">D</button>
+      <button class="icon-rail__button" type="button" aria-label="Queue">Q</button>
+      <button class="icon-rail__button" type="button" aria-label="Insights">I</button>
+      <div class="icon-rail__spacer"></div>
+      <button class="icon-rail__button" type="button" aria-label="Settings">S</button>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div class="topbar__title">
+          <h1>Doc Classifier Pro</h1>
+          <div class="badges">
+            <span class="badge badge--accent" id="runtime-badge">Runtime: checking</span>
+            <span class="badge badge--success" id="health-badge">API status: checking</span>
+          </div>
+        </div>
+        <div class="topbar__controls">
+          <label class="topbar__api-key" for="api-key">
+            <span>API key</span>
+            <input id="api-key" type="password" placeholder="Optional">
+          </label>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel panel--history">
+          <div class="panel__header">
+            <div>
+              <p class="panel__eyebrow">Library</p>
+              <h2>Document History</h2>
+            </div>
+          </div>
+
+          <label class="search-field" for="history-search">
+            <input id="history-search" type="search" placeholder="Search documents">
+          </label>
+
+          <div class="history-meta">
+            <span>Recently uploaded</span>
+            <strong id="history-count">0 docs</strong>
+          </div>
+
+          <div id="history-list" class="history-list"></div>
+        </section>
+
+        <section class="panel panel--hub">
+          <div class="panel__header panel__header--spread">
+            <div>
+              <p class="panel__eyebrow">Processing</p>
+              <h2>Batch Processing Hub</h2>
+            </div>
+            <div class="panel__actions">
+              <button id="process-button" class="button button--primary" type="button">Process Queue</button>
+              <button id="clear-button" class="button button--ghost" type="button">Clear Queue</button>
+            </div>
+          </div>
+
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Upload documents">
+            <input id="file-input" type="file" multiple hidden>
+            <div class="dropzone__icon">^</div>
+            <p class="dropzone__title">Drag &amp; Drop Documents Here</p>
+            <p class="dropzone__hint">or click to upload single or multiple files</p>
+          </div>
+
+          <div class="queue-toolbar">
+            <span id="queue-summary">No files queued</span>
+            <span id="queue-status">Idle</span>
+          </div>
+
+          <div id="queue-grid" class="queue-grid"></div>
+        </section>
+
+        <section class="panel panel--inspector">
+          <div class="panel__header">
+            <div>
+              <p class="panel__eyebrow">Inspector</p>
+              <h2>Document Details</h2>
+            </div>
+          </div>
+
+          <div class="preview-card">
+            <div id="preview-surface" class="preview-surface">
+              <div class="preview-placeholder">
+                <span>No document selected</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-block">
+            <h3>Classification</h3>
+            <div class="detail-grid detail-grid--summary">
+              <div>
+                <span>Category</span>
+                <strong id="detail-category">Waiting</strong>
+              </div>
+              <div>
+                <span>Confidence</span>
+                <strong id="detail-confidence">-</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-strip">
+            <button id="tab-data" class="tab-strip__button tab-strip__button--active" type="button">Extracted Data</button>
+            <button id="tab-raw" class="tab-strip__button" type="button">Raw Output</button>
+          </div>
+
+          <div id="tab-panel-data" class="tab-panel">
+            <div id="detail-fields" class="detail-fields"></div>
+          </div>
+
+          <div id="tab-panel-raw" class="tab-panel" hidden>
+            <pre id="raw-output" class="raw-output">Select a document to inspect its OCR preview and API response.</pre>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <template id="history-item-template">
+    <button class="history-item" type="button">
+      <div class="history-item__thumb"></div>
+      <div class="history-item__body">
+        <strong class="history-item__name"></strong>
+        <span class="history-item__time"></span>
+        <span class="history-item__category"></span>
+      </div>
+      <span class="history-item__status"></span>
+    </button>
+  </template>
+
+  <template id="queue-card-template">
+    <article class="queue-card">
+      <div class="queue-card__preview"></div>
+      <div class="queue-card__body">
+        <strong class="queue-card__name"></strong>
+        <p class="queue-card__stage"></p>
+        <div class="queue-card__footer">
+          <span class="queue-card__tag"></span>
+          <span class="queue-card__meta"></span>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <script src="/frontend-assets/app.js" defer></script>
+</body>
+</html>

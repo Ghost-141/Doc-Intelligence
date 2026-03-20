@@ -16,6 +16,11 @@ This is the best current deployment practice path for this repo because the acti
 - local FastAPI app
 - Ollama as the active classifier provider
 
+If you want to automate this guide instead of running the steps by hand, use the Ansible assets in:
+
+- `deployment/ansible/`
+- `deployment/ansible/README.md`
+
 The current Docker assets in this repo are GPU-oriented, so for a CPU-only Ubuntu machine the simpler and more realistic path is:
 
 - Python virtual environment
@@ -252,37 +257,9 @@ Check whether Ollama already installed a service:
 systemctl status ollama
 ```
 
-If not installed as a service, create one:
+The Ollama installer normally creates the `ollama` service for you. After install, verify and enable it:
 
 ```bash
-sudo tee /etc/systemd/system/ollama.service > /dev/null <<'EOF'
-[Unit]
-Description=Ollama Service
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-User=%i
-ExecStart=/usr/local/bin/ollama serve
-Restart=always
-RestartSec=5
-Environment="OLLAMA_HOST=127.0.0.1:11434"
-
-[Install]
-WantedBy=multi-user.target
-EOF
-```
-
-If the `%i` template is inconvenient, replace `User=%i` with your actual Ubuntu username.
-
-A ready-to-use service template is included in the repo:
-
-- [deployment/ollama.service](/C:/Users/Imtiaz/Documents/GitHub/doc-classification/deployment/ollama.service)
-
-Then:
-
-```bash
-sudo systemctl daemon-reload
 sudo systemctl enable ollama
 sudo systemctl start ollama
 sudo systemctl status ollama

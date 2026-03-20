@@ -15,11 +15,36 @@ def get_ingestion_service(request: Request) -> IngestionService:
 
 
 def get_extraction_service(request: Request) -> ExtractionService:
-    return request.app.state.extraction_service
+    return _require_service(
+        request=request,
+        state_name="extraction_service",
+        service_label="Extraction",
+    )
 
 
 def get_classification_service(request: Request) -> ClassificationService:
-    return request.app.state.classification_service
+    return _require_service(
+        request=request,
+        state_name="classification_service",
+        service_label="Classification",
+    )
+
+
+def _require_service(request: Request, state_name: str, service_label: str):
+    service = getattr(request.app.state, state_name, None)
+    if service is not None:
+        return service
+    startup_errors = getattr(request.app.state, "startup_errors", {})
+    error = startup_errors.get(
+        "ocr" if state_name == "extraction_service" else "classifier"
+    )
+    detail = f"{service_label} service is unavailable."
+    if error:
+        detail = f"{detail} Startup error: {error}"
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=detail,
+    )
 
 
 def require_api_key(
@@ -34,4 +59,6 @@ def require_api_key(
             detail="API key auth is enabled but no API keys are configured.",
         )
     if x_api_key not in settings.api_key_list:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key."
+        )
